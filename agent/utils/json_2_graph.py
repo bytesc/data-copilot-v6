@@ -345,20 +345,16 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
 
 def plot_histogram(ax, df: pd.DataFrame, primary_metric: str = 'doc_count'):
     """Plot histogram for range-based buckets"""
-    if 'from' in df.columns and 'to' in df.columns:
-        # Range buckets
-        labels = []
-        for _, row in df.iterrows():
-            from_val = row.get('from', '')
-            to_val = row.get('to', '')
-            if pd.notna(to_val) and to_val != '':
-                labels.append(f"{from_val}-{to_val}")
-            else:
-                labels.append(f"{from_val}+")
-        values = df[primary_metric].values if primary_metric in df.columns else df['doc_count'].values
-    else:
-        labels = df['key'].astype(str).values
-        values = df[primary_metric].values if primary_metric in df.columns else df['doc_count'].values
+    if 'level' in df.columns:
+        df = df[df['level'] == 0].copy()
+
+    if df.empty:
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center', transform=ax.transAxes)
+        return
+
+    # 用 key 作为标签（如 "0-20", "20-40", "80+"）
+    labels = df['key'].astype(str).values
+    values = df[primary_metric].values if primary_metric in df.columns else df['doc_count'].values
 
     ax.bar(range(len(labels)), values, color='coral', alpha=0.8, edgecolor='black')
     ax.set_xticks(range(len(labels)))
