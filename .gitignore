@@ -5,6 +5,7 @@ __pycache__/
 *.log
 api_key_openai.txt
 output_img/
+graph/
 cache/
 exports/
 tmp_imgs/*.png
