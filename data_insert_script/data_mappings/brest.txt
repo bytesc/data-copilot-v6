@@ -1,0 +1,217 @@
+    mapping = {
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0
+        },
+        "mappings": {
+            "_meta": {
+                "description": "BRSET Dataset. Retinal fundus images with demographics, quality, and pathology labels."
+            },
+            "properties": {
+                "image_id": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Unique identifier for the fundus image."
+                    }
+                },
+                "patient_id": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Unique identifier for the patient."
+                    }
+                },
+                "camera": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Retinal camera model."
+                    }
+                },
+                "patient_age": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Age of the patient in years. Range: 5-97."
+                    }
+                },
+                "comorbidities": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Patient's comorbidities as keywords."
+                    }
+                },
+                "diabetes_time_y": {
+                    "type": "float",
+                    "meta": {
+                        "description": "Diabetes duration in years."
+                    }
+                },
+                "insuline": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Insulin usage. e.g., Yes/No."
+                    }
+                },
+                "patient_sex": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Patient sex. 0: Male, 1: Female."
+                    }
+                },
+                "exam_eye": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Eye examined. e.g., OD (right), OS (left)."
+                    }
+                },
+                "diabetes": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Diabetes status. e.g., Yes/No."
+                    }
+                },
+                "nationality": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Patient nationality, e.g., Brazilian."
+                    }
+                },
+                "optic_disc": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Optic disc anatomy. 1: Normal, 2: Abnormal."
+                    }
+                },
+                "vessels": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Retinal vessels anatomy. 1: Normal, 2: Abnormal."
+                    }
+                },
+                "macula": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Macula anatomy. 1: Normal, 2: Abnormal."
+                    }
+                },
+                "DR_SDRG": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "DR grade (SDRG). 0-4. 0: No retinopathy."
+                    }
+                },
+                "DR_ICDR": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "DR grade (ICDR). 0-4. 0: No retinopathy."
+                    }
+                },
+                "focus": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Image focus quality. 1: Adequate, 2: Inadequate."
+                    }
+                },
+                "Illuminaton": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Image illumination. 1: Adequate, 2: Inadequate."
+                    }
+                },
+                "image_field": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Image field coverage. 1: Adequate, 2: Inadequate."
+                    }
+                },
+                "artifacts": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Image artifacts. 1: Adequate, 2: Inadequate."
+                    }
+                },
+                "diabetic_retinopathy": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Diabetic retinopathy. 1: Present, 0: Absent."
+                    }
+                },
+                "macular_edema": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Macular edema. 1: Present, 0: Absent."
+                    }
+                },
+                "scar": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Scar (e.g., Toxoplasmosis). 1: Present, 0: Absent."
+                    }
+                },
+                "nevus": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Nevus. 1: Present, 0: Absent."
+                    }
+                },
+                "amd": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Age macular degeneration 1: Present, 0: Absent"
+                    }
+                },
+                "vascular_occlusion": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Vascular occlusion. 1: Present, 0: Absent."
+                    }
+                },
+                "hypertensive_retinopathy": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Hypertensive retinopathy. 1: Present, 0: Absent."
+                    }
+                },
+                "drusens": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Drusens. 1: Present, 0: Absent."
+                    }
+                },
+                "hemorrhage": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "retinal hemorrhage 1: Present, 0: Absent"
+                    }
+                },
+                "retinal_detachment": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Retinal detachment. 1: Present, 0: Absent."
+                    }
+                },
+                "myopic_fundus": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Myopic fundus. 1: Present, 0: Absent."
+                    }
+                },
+                "increased_cup_disc": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Increased cup-disc ratio. 1: Present, 0: Absent."
+                    }
+                },
+                "other": {
+                    "type": "integer",
+                    "meta": {
+                        "description": "Other pathologies. 1: Present, 0: Absent."
+                    }
+                },
+                "quality": {
+                    "type": "keyword",
+                    "meta": {
+                        "description": "Overall image quality grade/flag."
+                    }
+                }
+            }
+        }
+    }
