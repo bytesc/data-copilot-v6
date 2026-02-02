@@ -6,6 +6,7 @@ __pycache__/
 api_key_openai.txt
 output_img/
 graph/
+json/
 cache/
 exports/
 tmp_imgs/*.png
@@ -18,3 +19,4 @@ temp.html
 agent_log.txt
 
 /graph/
+/json/

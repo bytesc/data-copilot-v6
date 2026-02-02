@@ -1,3 +1,5 @@
+import json
+
 from pywebio import start_server
 from pywebio.input import input, TEXT
 from pywebio.output import put_text, put_markdown, put_loading, put_image
@@ -15,9 +17,14 @@ def main():
         if question.strip():
             with put_loading(shape="grow", color="primary"):
                 try:
-                    answer, img_path = query_agent(question, with_exp=False, img=True)
-                    put_markdown(f"**Query Result:**")
-                    put_markdown(answer)
+                    query_json, answer, json_path, img_path = query_agent(question,  img=True)
+                    put_markdown(f"**Query:**")
+                    put_markdown("\n```json\n" + json.dumps(query_json, indent=2, ensure_ascii=False) + "\n```\n")
+                    put_markdown(f"**Result:**")
+                    put_markdown("\n```json\n" + json.dumps(answer, indent=2, ensure_ascii=False) + "\n```\n")
+                    put_markdown(f"**Object:**")
+                    put_markdown(json_path)
+
                     if img_path!="":
                         put_image(open(img_path, 'rb').read())
                 except Exception as e:
