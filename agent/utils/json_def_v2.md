@@ -30,7 +30,7 @@ This document defines the JSON interface format for OpenSearch statistical analy
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query.type` | string | Yes | Query type: `stats` (statistical calculation) or `distribution` (distribution analysis) |
-| `query.chart_type` | string | Yes | Visualization chart type: `bar`, `histogram`, `pie`, `line`, `heatmap` |
+| `query.chart_type` | string | Conditional | Visualization chart type: `bar`, `histogram`, `pie`, `line`, `heatmap` |
 | `query.config` | object | Yes | Query configuration object |
 | `query.config.fields` | string[] | Conditional | Numerical fields to analyze (required for stats type) |
 | `query.config.metrics` | string[] | Conditional | Statistical metrics to calculate |

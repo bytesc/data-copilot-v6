@@ -1,7 +1,6 @@
 
 
 json_doc = """
-
 # OpenSearch Statistical Analysis JSON Interface Specification
 
 ## Overview
@@ -17,7 +16,7 @@ This document defines the JSON interface format for OpenSearch statistical analy
 {
   "query": {
     "type": "string",        // Required: Query type
-    "chart_type": "string",  // Required: Visualization chart type
+    "chart_type": "string",  // Optional: Visualization chart type
     "config": {              // Required: Query configuration
       "fields": [],
       "metrics": [],
@@ -34,7 +33,7 @@ This document defines the JSON interface format for OpenSearch statistical analy
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query.type` | string | Yes | Query type: `stats` (statistical calculation) or `distribution` (distribution analysis) |
-| `query.chart_type` | string | Yes | Visualization chart type: `bar`, `histogram`, `pie`, `line`, `heatmap` |
+| `query.chart_type` | string | Conditional | Visualization chart type: `bar`, `histogram`, `pie`, `line`, `heatmap` |
 | `query.config` | object | Yes | Query configuration object |
 | `query.config.fields` | string[] | Conditional | Numerical fields to analyze (required for stats type) |
 | `query.config.metrics` | string[] | Conditional | Statistical metrics to calculate |
@@ -658,5 +657,6 @@ For time-based bucketing analysis
 | Heatmap dimensions | 20x20 | 50x50 |
 
 ---
+
 
 """

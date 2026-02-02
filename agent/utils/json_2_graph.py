@@ -201,168 +201,6 @@ def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any]) -> 
     return 'single_bar'
 
 
-def plot_single_bar(ax, df: pd.DataFrame, primary_metric: str = 'doc_count', show_pie: bool = False):
-    """Plot simple bar chart, optionally with a side pie chart"""
-    if primary_metric not in df.columns:
-        primary_metric = 'doc_count'
-
-    values = df[primary_metric].values
-    keys = df['key'].astype(str).values
-
-    # Limit categories if too many
-    if len(keys) > 15:
-        # Group small ones into "Others"
-        sorted_idx = np.argsort(values)[::-1]
-        top_n = 14
-        top_idx = sorted_idx[:top_n]
-        other_sum = values[sorted_idx[top_n:]].sum()
-
-        keys = list(keys[top_idx]) + ['Others']
-        values = list(values[top_idx]) + [other_sum]
-
-    colors = sns.color_palette("husl", len(keys))
-
-    if show_pie and len(keys) <= 10:
-        # Create two subplots side by side
-        ax.set_visible(False)  # Hide original ax
-        ax1 = ax.figure.add_subplot(121)
-        ax2 = ax.figure.add_subplot(122)
-
-        # Bar chart
-        bars = ax1.bar(keys, values, color=colors, alpha=0.8)
-        ax1.set_xticks(range(len(keys)))
-        ax1.set_xticklabels(keys, rotation=45, ha='right')
-        ax1.set_ylabel('Count')
-
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width() / 2., height,
-                     f'{int(height)}', ha='center', va='bottom', fontsize=9)
-
-        # Pie chart
-        wedges, texts, autotexts = ax2.pie(values, labels=keys, autopct='%1.1f%%',
-                                           startangle=90, colors=colors)
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontweight('bold')
-
-    else:
-        # Simple bar chart
-        bars = ax.bar(keys, values, color=colors, alpha=0.8)
-        ax.set_xticks(range(len(keys)))
-        ax.set_xticklabels(keys, rotation=45, ha='right')
-
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height,
-                    f'{int(height)}', ha='center', va='bottom', fontsize=9)
-
-
-def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
-                     metadata: Dict[str, str], save_dir: str) -> str:
-    """
-    Plot grouped bar charts in separate subplots for each outer bucket.
-    """
-    buckets = result_json.get('buckets', [])
-    if not buckets:
-        return None
-
-    # Create subplot for each outer bucket
-    n_plots = len(buckets)
-    n_cols = min(2, n_plots)
-    n_rows = (n_plots + n_cols - 1) // n_cols
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5 * n_rows))
-    if n_plots == 1:
-        axes = [axes]
-    else:
-        axes = axes.flatten() if n_rows > 1 else axes.flatten()
-
-    dimensions = query_config.get('dimensions', [])
-    metrics = query_config.get('metrics', ['count'])
-    primary_metric = metrics[0] if metrics else 'doc_count'
-
-    for idx, bucket in enumerate(buckets):
-        ax = axes[idx] if n_plots > 1 else axes[0]
-        outer_key = bucket.get('key', f'Group {idx}')
-
-        # Get inner buckets from sub_aggregations
-        sub_ags = bucket.get('sub_aggregations', {})
-        inner_buckets = sub_ags.get('buckets', []) if sub_ags else []
-
-        if not inner_buckets:
-            # Try dimensions/groups format
-            dims = bucket.get('dimensions', {})
-            if dims and dimensions:
-                inner_buckets = dims.get(dimensions[0], {}).get('buckets', [])
-
-        if inner_buckets:
-            keys = [b.get('key', '') for b in inner_buckets]
-            values = []
-            for b in inner_buckets:
-                if primary_metric in b:
-                    values.append(b[primary_metric])
-                elif 'metrics' in b and primary_metric in b['metrics']:
-                    values.append(b['metrics'][primary_metric])
-                else:
-                    values.append(b.get('doc_count', 0))
-
-            colors = sns.color_palette("husl", len(keys))
-            bars = ax.bar(keys, values, color=colors, alpha=0.8)
-
-            # Add value labels
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2., height,
-                        f'{int(height)}', ha='center', va='bottom', fontsize=9)
-
-            ax.set_title(f'{outer_key}')
-            ax.set_xticks(range(len(keys)))
-            ax.set_xticklabels(keys, rotation=45, ha='right')
-            ax.set_xlabel(dimensions[0] if dimensions else 'Category')
-            ax.set_ylabel(primary_metric.capitalize())
-        else:
-            ax.text(0.5, 0.5, f'No data for {outer_key}',
-                    ha='center', va='center', transform=ax.transAxes)
-
-    # Hide extra subplots
-    for idx in range(n_plots, len(axes) if n_plots > 1 else 1):
-        if n_plots > 1:
-            axes[idx].axis('off')
-
-    plt.suptitle(metadata['title'], fontsize=14, fontweight='bold')
-    plt.tight_layout()
-
-    filename = generate_random_filename(8)
-    filepath = os.path.join(save_dir, filename)
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
-    plt.close()
-
-    return filepath
-
-
-def plot_histogram(ax, df: pd.DataFrame, primary_metric: str = 'doc_count'):
-    """Plot histogram for range-based buckets"""
-    if 'level' in df.columns:
-        df = df[df['level'] == 0].copy()
-
-    if df.empty:
-        ax.text(0.5, 0.5, 'No data available', ha='center', va='center', transform=ax.transAxes)
-        return
-
-    # 用 key 作为标签（如 "0-20", "20-40", "80+"）
-    labels = df['key'].astype(str).values
-    values = df[primary_metric].values if primary_metric in df.columns else df['doc_count'].values
-
-    ax.bar(range(len(labels)), values, color='coral', alpha=0.8, edgecolor='black')
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha='right')
-
-    # Add value labels
-    for i, v in enumerate(values):
-        ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontsize=9)
 
 
 def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count',
@@ -559,13 +397,13 @@ def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metri
         ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontsize=9)
 
 
-def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any],
-                     metadata: Dict[str, str], chart_type: str):
-    """Handle stats type visualizations with axis labels"""
+def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any], chart_type: str):
+    """Handle stats type visualizations"""
     fields = query_config.get('fields', [])
     metrics = query_config.get('metrics', ['min', 'max', 'avg', 'count'])
 
     if chart_type == 'histogram':
+        # For histogram: show metrics distribution across fields
         field_labels = []
         metric_data = {m: [] for m in metrics}
 
@@ -587,26 +425,22 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
         ax.set_xticklabels(field_labels, rotation=45, ha='right')
         ax.legend()
 
-        # 设置标签
-        ax.set_xlabel(metadata.get('xlabel', 'Fields'), fontsize=12)
-        ax.set_ylabel(metadata.get('ylabel', 'Values'), fontsize=12)
-
     elif chart_type == 'bar':
+        # Bar chart comparing specific metric across fields, or all metrics for one field
         if len(fields) > 1:
+            # Compare first metric across all fields
             metric = metrics[0] if metrics else 'avg'
             values = [result_json.get(f, {}).get(metric, 0) for f in fields]
             colors = sns.color_palette("husl", len(fields))
             ax.bar(fields, values, color=colors, alpha=0.8)
-
-            ax.set_xlabel(metadata.get('xlabel', 'Fields'), fontsize=12)
-            ax.set_ylabel(metadata.get('ylabel', f'{metric.capitalize()} Value'), fontsize=12)
+            ax.set_ylabel(f'{metric.capitalize()} Value')
         else:
+            # Show all metrics for single field
             field = fields[0]
             values = [result_json.get(field, {}).get(m, 0) for m in metrics]
             ax.bar(metrics, values, color='steelblue', alpha=0.8)
+            ax.set_ylabel('Value')
 
-            ax.set_xlabel(metadata.get('xlabel', 'Metrics'), fontsize=12)
-            ax.set_ylabel(metadata.get('ylabel', 'Value'), fontsize=12)
 
 
 def visualize_opensearch_result(query_json: Dict[str, Any],
@@ -701,50 +535,6 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
 
     return filepath
 
-
-def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any], chart_type: str):
-    """Handle stats type visualizations"""
-    fields = query_config.get('fields', [])
-    metrics = query_config.get('metrics', ['min', 'max', 'avg', 'count'])
-
-    if chart_type == 'histogram':
-        # For histogram: show metrics distribution across fields
-        field_labels = []
-        metric_data = {m: [] for m in metrics}
-
-        for field in fields:
-            if field in result_json:
-                field_labels.append(field)
-                for metric in metrics:
-                    val = result_json[field].get(metric, 0)
-                    metric_data[metric].append(val)
-
-        x = np.arange(len(field_labels))
-        width = 0.8 / len(metrics) if metrics else 0.8
-
-        for i, metric in enumerate(metrics):
-            offset = (i - len(metrics) / 2) * width + width / 2
-            ax.bar(x + offset, metric_data[metric], width, label=metric, alpha=0.8)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(field_labels, rotation=45, ha='right')
-        ax.legend()
-
-    elif chart_type == 'bar':
-        # Bar chart comparing specific metric across fields, or all metrics for one field
-        if len(fields) > 1:
-            # Compare first metric across all fields
-            metric = metrics[0] if metrics else 'avg'
-            values = [result_json.get(f, {}).get(metric, 0) for f in fields]
-            colors = sns.color_palette("husl", len(fields))
-            ax.bar(fields, values, color=colors, alpha=0.8)
-            ax.set_ylabel(f'{metric.capitalize()} Value')
-        else:
-            # Show all metrics for single field
-            field = fields[0]
-            values = [result_json.get(field, {}).get(m, 0) for m in metrics]
-            ax.bar(metrics, values, color='steelblue', alpha=0.8)
-            ax.set_ylabel('Value')
 
 
 if __name__ == "__main__":
