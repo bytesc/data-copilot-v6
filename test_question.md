@@ -31,7 +31,7 @@ Analyze patient distribution by age group and diabetic retinopathy grade.
 
 Calculate the proportion of patients with diabetic retinopathy by gender.
 
-Analyze patient distribution by age group and diabetic retinopathy grade.
+Analyze patient distribution by age group(20-30, 30-40, 40-50...) and diabetic retinopathy grade.
 
 Show the percentage distribution of image quality grades in the dataset.
 
