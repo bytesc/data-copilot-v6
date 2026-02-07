@@ -77,12 +77,15 @@ def extract_chart_metadata(query_json: Dict[str, Any], result_json: Dict[str, An
             # Pie charts typically don't need axis labels
             metadata['title'] = f"Distribution of {dimensions[0] if dimensions else 'Categories'}"
         elif chart_type == 'heatmap':
-            if len(groups) >= 2:
-                metadata['xlabel'] = groups[0]
-                metadata['ylabel'] = groups[1]
-            elif len(dimensions) >= 2:
+            # 热力图：x轴是第一个dimension，y轴是第二个dimension（或group）
+            if len(dimensions) >= 2:
+                metadata['xlabel'] = dimensions[1]  # artifacts
+                metadata['ylabel'] = dimensions[0]  # focus
+            elif len(dimensions) == 1 and len(groups) >= 1:
                 metadata['xlabel'] = dimensions[0]
-                metadata['ylabel'] = dimensions[1]
+                metadata['ylabel'] = groups[0]
+            # 热力图标题特殊处理
+            metadata['title'] = f"Heatmap: {' vs '.join(dimensions)} by {groups[0] if groups else 'Group'}"
 
     metadata['title'] = ' | '.join(title_parts) if title_parts else 'OpenSearch Analysis Visualization'
 
@@ -164,16 +167,14 @@ def is_range_bucket(bucket: Dict) -> bool:
     return 'from' in bucket or 'to' in bucket
 
 
-def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any]) -> str:
+def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any], chart_type: str = '') -> str:
     """
     Determine the best chart strategy based on data structure.
-
-    Returns:
-        'single_bar': single layer bar chart
-        'histogram': range-based buckets
-        'bar_with_pie': single layer with percentage metrics
-        'grouped_bar': multiple outer groups, need subplots
     """
+    # 如果明确指定了热力图，优先返回heatmap策略
+    if chart_type == 'heatmap':
+        return 'heatmap'
+
     if df.empty:
         return 'single_bar'
 
@@ -199,8 +200,6 @@ def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any]) -> 
             return 'single_bar'
 
     return 'single_bar'
-
-
 
 
 def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count',
@@ -365,6 +364,118 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
     return filepath
 
 
+def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
+                 metadata: Dict[str, str], save_dir: str) -> str:
+    """
+    绘制热力图：针对 camera × focus × artifacts 三层嵌套数据
+    每个相机型号一个子图，展示 focus vs artifacts 的 count/percentage 分布
+    """
+    buckets = result_json.get('buckets', [])
+    if not buckets:
+        return None
+
+    dimensions = query_config.get('dimensions', ['focus', 'artifacts'])
+    metrics = query_config.get('metrics', ['count', 'percentage'])
+    primary_metric = metrics[0] if metrics else 'count'
+    group_field = query_config.get('groups', ['camera'])[0] if query_config.get('groups') else 'camera'
+
+    n_plots = len(buckets)
+    n_cols = min(2, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 6 * n_rows))
+    if n_plots == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten() if n_plots > 1 else [axes]
+
+    for idx, bucket in enumerate(buckets):
+        ax = axes[idx] if n_plots > 1 else axes[0]
+        camera_model = bucket.get('key', f'Camera {idx}')
+
+        # 构建透视表：行=focus, 列=artifacts, 值=count/percentage
+        pivot_data = {}
+        focus_labels = set()
+        artifact_labels = set()
+
+        # 解析 sub_aggregations
+        sub_ags = bucket.get('sub_aggregations', {})
+        focus_buckets = sub_ags.get('buckets', [])
+
+        for focus_bucket in focus_buckets:
+            focus_key = str(focus_bucket.get('key', ''))
+            focus_labels.add(focus_key)
+
+            # 获取 artifacts 子桶
+            sub_sub_ags = focus_bucket.get('sub_aggregations', {})
+            artifact_buckets = sub_sub_ags.get('buckets', [])
+
+            for artifact_bucket in artifact_buckets:
+                artifact_key = str(artifact_bucket.get('key', ''))
+                artifact_labels.add(artifact_key)
+
+                # 获取数值
+                if primary_metric in artifact_bucket:
+                    value = artifact_bucket[primary_metric]
+                elif 'metrics' in artifact_bucket and primary_metric in artifact_bucket['metrics']:
+                    value = artifact_bucket['metrics'][primary_metric]
+                else:
+                    value = artifact_bucket.get('doc_count', 0)
+
+                if focus_key not in pivot_data:
+                    pivot_data[focus_key] = {}
+                pivot_data[focus_key][artifact_key] = value
+
+        # 创建 DataFrame
+        if pivot_data:
+            # 确保行列顺序一致
+            focus_labels = sorted(list(focus_labels))
+            artifact_labels = sorted(list(artifact_labels))
+
+            matrix = []
+            for focus in focus_labels:
+                row = []
+                for artifact in artifact_labels:
+                    row.append(pivot_data.get(focus, {}).get(artifact, 0))
+                matrix.append(row)
+
+            df_pivot = pd.DataFrame(matrix, index=focus_labels, columns=artifact_labels)
+
+            # 绘制热力图
+            sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
+                        cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
+                        linewidths=0.5, linecolor='gray')
+
+            # 设置标签
+            ax.set_title(f'{camera_model}\n(n={bucket.get("doc_count", 0)})',
+                         fontsize=12, fontweight='bold')
+            ax.set_xlabel(dimensions[1] if len(dimensions) > 1 else 'Artifacts', fontsize=11)
+            ax.set_ylabel(dimensions[0] if len(dimensions) > 0 else 'Focus', fontsize=11)
+
+            # 旋转x轴标签
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
+            ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+        else:
+            ax.text(0.5, 0.5, f'No data for {camera_model}',
+                    ha='center', va='center', transform=ax.transAxes)
+
+    # 隐藏多余的子图
+    for idx in range(n_plots, len(axes)):
+        axes[idx].axis('off')
+
+    # 添加总标题
+    fig.suptitle(metadata.get('title', f'Heatmap Analysis by {group_field.capitalize()}'),
+                 fontsize=14, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    filename = generate_random_filename(8)
+    filepath = os.path.join(save_dir, filename)
+    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    return filepath
+
+
 def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count'):
     """Plot histogram with axis labels from metadata"""
     if 'level' in df.columns:
@@ -397,7 +508,8 @@ def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metri
         ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontsize=9)
 
 
-def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any], chart_type: str):
+def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any],
+                     metadata: Dict[str, str], chart_type: str):
     """Handle stats type visualizations"""
     fields = query_config.get('fields', [])
     metrics = query_config.get('metrics', ['min', 'max', 'avg', 'count'])
@@ -424,6 +536,7 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
         ax.set_xticks(x)
         ax.set_xticklabels(field_labels, rotation=45, ha='right')
         ax.legend()
+        ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
 
     elif chart_type == 'bar':
         # Bar chart comparing specific metric across fields, or all metrics for one field
@@ -440,7 +553,13 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
             values = [result_json.get(field, {}).get(m, 0) for m in metrics]
             ax.bar(metrics, values, color='steelblue', alpha=0.8)
             ax.set_ylabel('Value')
+        ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
 
+    elif chart_type == 'heatmap':
+        # Stats类型的热力图（如果有矩阵数据）
+        ax.text(0.5, 0.5, 'Heatmap for stats type not implemented\n(Use distribution type for heatmap)',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12)
+        ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
 
 
 def visualize_opensearch_result(query_json: Dict[str, Any],
@@ -464,7 +583,6 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
         fig, ax = plt.subplots(figsize=(12, 7))
         try:
             plot_stats_chart(ax, result_json, config, metadata, chart_type)
-            ax.set_title(metadata['title'], fontsize=14, fontweight='bold', pad=20)
             plt.tight_layout()
             plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
             plt.close()
@@ -484,13 +602,23 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
         plt.close()
         return filepath
 
-    strategy = determine_chart_strategy(df, config)
+    # 关键修复：传递 chart_type 给 determine_chart_strategy
+    strategy = determine_chart_strategy(df, config, chart_type)
+
+    # 如果是明确的热力图请求，强制使用heatmap策略
+    if chart_type == 'heatmap':
+        strategy = 'heatmap'
+
     buckets = result_json.get('buckets', [])
     if buckets and any(is_range_bucket(b) for b in buckets):
         strategy = 'histogram'
 
     try:
-        if strategy == 'grouped_bar':
+        # 新增：热力图分支
+        if strategy == 'heatmap':
+            filepath = plot_heatmap(result_json, config, metadata, save_dir)
+            return filepath
+        elif strategy == 'grouped_bar':
             filepath = plot_grouped_bar(result_json, config, metadata, save_dir)
             return filepath
         else:
@@ -536,8 +664,111 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
     return filepath
 
 
-
 if __name__ == "__main__":
+    # 测试热力图
+    test_query = {
+        "query": {
+            "type": "distribution",
+            "chart_type": "heatmap",
+            "config": {
+                "dimensions": ["focus", "artifacts"],
+                "groups": ["camera"],
+                "metrics": ["count", "percentage"],
+                "filters": []
+            }
+        }
+    }
+
+    test_result = {
+        "buckets": [
+            {
+                "key": "Canon CR",
+                "doc_count": 10591,
+                "metrics": {"count": 10591, "percentage": 65.11},
+                "sub_aggregations": {
+                    "buckets": [
+                        {
+                            "key": "1",
+                            "doc_count": 10212,
+                            "metrics": {"count": 10212, "percentage": 96.42},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 10179, "metrics": {"count": 10179, "percentage": 99.68}},
+                                    {"key": "2", "doc_count": 33, "metrics": {"count": 33, "percentage": 0.32}}
+                                ]
+                            }
+                        },
+                        {
+                            "key": "2",
+                            "doc_count": 378,
+                            "metrics": {"count": 378, "percentage": 3.57},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 374, "metrics": {"count": 374, "percentage": 98.94}},
+                                    {"key": "2", "doc_count": 4, "metrics": {"count": 4, "percentage": 1.06}}
+                                ]
+                            }
+                        },
+                        {
+                            "key": "0",
+                            "doc_count": 1,
+                            "metrics": {"count": 1, "percentage": 0.01},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 1, "metrics": {"count": 1, "percentage": 100.0}}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "key": "NIKON NF5050",
+                "doc_count": 5675,
+                "metrics": {"count": 5675, "percentage": 34.89},
+                "sub_aggregations": {
+                    "buckets": [
+                        {
+                            "key": "1",
+                            "doc_count": 5511,
+                            "metrics": {"count": 5511, "percentage": 97.11},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 5493, "metrics": {"count": 5493, "percentage": 99.67}},
+                                    {"key": "2", "doc_count": 18, "metrics": {"count": 18, "percentage": 0.33}}
+                                ]
+                            }
+                        },
+                        {
+                            "key": "2",
+                            "doc_count": 163,
+                            "metrics": {"count": 163, "percentage": 2.87},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 161, "metrics": {"count": 161, "percentage": 98.77}},
+                                    {"key": "2", "doc_count": 2, "metrics": {"count": 2, "percentage": 1.23}}
+                                ]
+                            }
+                        },
+                        {
+                            "key": "0",
+                            "doc_count": 1,
+                            "metrics": {"count": 1, "percentage": 0.02},
+                            "sub_aggregations": {
+                                "buckets": [
+                                    {"key": "1", "doc_count": 1, "metrics": {"count": 1, "percentage": 100.0}}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    path = visualize_opensearch_result(test_query, test_result)
+    print(f"Saved to: {path}")
+
     # Test with your provided data
     test_query = {
         "query": {

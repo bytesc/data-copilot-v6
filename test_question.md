@@ -27,3 +27,15 @@ Analyze patient distribution by age group and diabetic retinopathy grade.
 不同糖尿病病程区间和相机型号下，黄斑水肿的风险
 
 看看左眼/右眼在不同照明质量下，出现视网膜出血的风险分布
+
+
+Calculate the proportion of patients with diabetic retinopathy by gender.
+
+Analyze patient distribution by age group and diabetic retinopathy grade.
+
+Show the percentage distribution of image quality grades in the dataset.
+
+What is the association between different age groups (0-30, 30-50, 50-70, 70+ years) and the presence of age-related macular degeneration and hypertensive retinopathy? Please display this grouped by diabetic retinopathy status and sex.heatmap
+
+Is there a correlation between different camera models and image focus quality or artifact presence? I want to understand which camera models are more prone to specific image quality issues. heatmap
+
