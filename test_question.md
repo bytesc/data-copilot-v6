@@ -39,3 +39,7 @@ What is the association between different age groups (0-30, 30-50, 50-70, 70+ ye
 
 Is there a correlation between different camera models and image focus quality or artifact presence? I want to understand which camera models are more prone to specific image quality issues. heatmap
 
+
+show the risk of  age-related macular degeneration different age groups (0-30, 30-50, 50-70, 70+ years)  heatmap
+
+Analyze patient distribution by age group(20-30, 30-40, 40-50...) and for each DR grade.
