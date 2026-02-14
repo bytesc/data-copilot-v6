@@ -77,20 +77,45 @@ def extract_chart_metadata(query_json: Dict[str, Any], result_json: Dict[str, An
             # Pie charts typically don't need axis labels
             metadata['title'] = f"Distribution of {dimensions[0] if dimensions else 'Categories'}"
         elif chart_type == 'heatmap':
-            # 热力图：x轴是第一个dimension，y轴是第二个dimension（或group）
-            if len(dimensions) >= 2:
-                metadata['xlabel'] = dimensions[1]  # artifacts
-                metadata['ylabel'] = dimensions[0]  # focus
-            elif len(dimensions) == 1 and len(groups) >= 1:
-                metadata['xlabel'] = dimensions[0]
-                metadata['ylabel'] = groups[0]
-            # 热力图标题特殊处理
-            metadata['title'] = f"Heatmap: {' vs '.join(dimensions)} by {groups[0] if groups else 'Group'}"
+            # 热力图：根据数据结构确定横纵坐标
+            # 外层桶（buckets字段）对应X轴，内层桶（sub_aggregations/groups）对应Y轴
+            buckets = config.get('buckets', [])
 
-    metadata['title'] = ' | '.join(title_parts) if title_parts else 'OpenSearch Analysis Visualization'
+            # X轴标签：优先使用buckets的field字段，其次是dimensions的第一个字段
+            if buckets and len(buckets) > 0:
+                xlabel_source = buckets[0].get('field', '')
+                if xlabel_source:
+                    metadata['xlabel'] = xlabel_source
+                elif len(dimensions) > 0:
+                    metadata['xlabel'] = dimensions[0]
+            elif len(dimensions) > 0:
+                metadata['xlabel'] = dimensions[0]
+
+            # Y轴标签：优先使用dimensions字段（分析目标），其次是metrics_field
+            if len(dimensions) > 0:
+                # 如果dimensions只有一个，那就是分析目标；如果有多个，第二个可能是分组
+                metadata['ylabel'] = dimensions[0]
+            elif metrics_field:
+                metadata['ylabel'] = metrics_field
+
+            # 热力图标题
+            title_components = []
+            if len(dimensions) > 0:
+                title_components.append(dimensions[0])
+            if buckets and len(buckets) > 0 and buckets[0].get('field'):
+                title_components.append(buckets[0].get('field'))
+            if metrics_field:
+                title_components.append(f"by {metrics_field}")
+
+            if title_components:
+                metadata['title'] = f"Heatmap: {' vs '.join(title_components)}"
+            else:
+                metadata['title'] = 'Heatmap Analysis'
+
+    metadata['title'] = ' | '.join(title_parts) if title_parts and not metadata.get('title') else (
+                metadata.get('title') or 'OpenSearch Analysis Visualization')
 
     return metadata
-
 
 def parse_distribution_buckets(result_json: Dict[str, Any], max_depth: int = 10) -> pd.DataFrame:
     """
@@ -374,10 +399,11 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
                  metadata: Dict[str, str], save_dir: str) -> str:
     """
     通用热力图绘制函数：处理任意两层嵌套桶结构
-    外层桶 -> 行 (Y轴)
-    内层桶 -> 列 (X轴)
+    外层桶 -> 列 (X轴)
+    内层桶 -> 行 (Y轴)
     数值 -> 单元格颜色强度
 
+    单元格显示格式：主数值 (百分比)
     注意：始终生成单张热力图，不使用子图
     """
     buckets = result_json.get('buckets', [])
@@ -385,8 +411,14 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
         return None
 
     dimensions = query_config.get('dimensions', [])
+    groups = query_config.get('groups', [])
     metrics = query_config.get('metrics', ['count', 'percentage'])
+    metrics_field = query_config.get('metrics_field', '')
+    buckets_config = query_config.get('buckets', [])
+
     primary_metric = metrics[0] if metrics else 'count'
+    # 确定百分比字段名称（可能是'percentage'或在metrics中）
+    percentage_metric = 'percentage' if 'percentage' in metrics else (metrics[1] if len(metrics) > 1 else None)
 
     # 判断数据结构：单层分组还是双层分组
     has_nested = False
@@ -404,35 +436,80 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
         if has_nested:
             break
 
-    # 单层数据：创建1xN矩阵
+    # 单层数据：创建1xN矩阵（行固定为metrics_field或primary_metric，列为外层桶）
     if not has_nested:
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        row_labels = ['Value']
         col_labels = [str(b.get('key', '')) for b in buckets]
+        # 行标签：优先使用metrics_field，其次是primary_metric
+        row_label = metrics_field if metrics_field else primary_metric
+        row_labels = [row_label.capitalize() if isinstance(row_label, str) else str(row_label)]
 
-        values = []
+        # 构建主数值矩阵和百分比矩阵
+        values_matrix = []
+        percentage_matrix = []
+
         for bucket in buckets:
+            # 获取主数值
             if primary_metric in bucket:
-                values.append(bucket[primary_metric])
+                main_val = bucket[primary_metric]
             elif 'metrics' in bucket and primary_metric in bucket['metrics']:
-                values.append(bucket['metrics'][primary_metric])
+                main_val = bucket['metrics'][primary_metric]
             else:
-                values.append(bucket.get('doc_count', 0))
+                main_val = bucket.get('doc_count', 0)
+            values_matrix.append(main_val)
 
-        matrix = [values]
+            # 获取百分比数值
+            pct_val = None
+            if percentage_metric and percentage_metric in bucket:
+                pct_val = bucket[percentage_metric]
+            elif 'metrics' in bucket and percentage_metric and percentage_metric in bucket['metrics']:
+                pct_val = bucket['metrics'][percentage_metric]
+            percentage_matrix.append(pct_val)
+
+        # 单层数据：1行 x N列
+        matrix = [values_matrix]
+
+        # 构建注释矩阵：格式为 "数值 (百分比%)"
+        annot_matrix = []
+        row_annotations = []
+        for main_val, pct_val in zip(values_matrix, percentage_matrix):
+            if pct_val is not None:
+                # 根据数值大小决定格式，避免小数位过多
+                if isinstance(pct_val, float):
+                    annot_str = f'{int(main_val)}\n({pct_val:.2f}%)'
+                else:
+                    annot_str = f'{int(main_val)}\n({pct_val}%)'
+            else:
+                annot_str = str(int(main_val))
+            row_annotations.append(annot_str)
+        annot_matrix.append(row_annotations)
+
         df_pivot = pd.DataFrame(matrix, index=row_labels, columns=col_labels)
 
-        sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
+        # 使用自定义注释矩阵
+        sns.heatmap(df_pivot, annot=annot_matrix, fmt='',
                     cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
                     linewidths=0.5, linecolor='gray')
 
         ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
 
-        if metadata.get('xlabel'):
-            ax.set_xlabel(metadata['xlabel'], fontsize=12)
-        if metadata.get('ylabel'):
-            ax.set_ylabel(metadata['ylabel'], fontsize=12)
+        # 设置轴标签：优先使用metadata，其次从query_config推断
+        # X轴：外层桶的field（如patient_age）或dimensions[0]
+        xlabel = metadata.get('xlabel')
+        if not xlabel and buckets_config and len(buckets_config) > 0:
+            xlabel = buckets_config[0].get('field', '')
+        if not xlabel and len(dimensions) > 0:
+            xlabel = dimensions[0]
+        if xlabel:
+            ax.set_xlabel(xlabel, fontsize=12)
+
+        # Y轴：metrics_field或dimensions[0]（分析目标）
+        ylabel = metadata.get('ylabel')
+        if not ylabel:
+            ylabel = metrics_field if metrics_field else (dimensions[0] if len(dimensions) > 0 else primary_metric)
+        if ylabel:
+            ax.set_ylabel(ylabel, fontsize=12)
 
         plt.tight_layout()
         filename = generate_random_filename(8)
@@ -441,16 +518,17 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
         plt.close()
         return filepath
 
-    # 双层数据：始终合并成单个大矩阵，不使用子图
+    # 双层数据：外层桶 -> 列(X轴)，内层桶 -> 行(Y轴)
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    # 收集所有可能的内层键（用于统一列顺序）
+    # 收集所有可能的内层键（用于统一行顺序）- 现在内层键作为行
     all_inner_keys = set()
     bucket_data_list = []
 
     for bucket in buckets:
         outer_key = str(bucket.get('key', ''))
-        inner_data = {}
+        inner_data = {}  # 存储主数值
+        inner_percentage = {}  # 存储百分比
 
         # 尝试多种嵌套格式
         sub_ags = bucket.get('sub_aggregations', {})
@@ -468,63 +546,130 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
                 if sub_sub_ags and 'buckets' in sub_sub_ags:
                     for sub_sub_bucket in sub_sub_ags['buckets']:
                         inner_key = f"{sub_bucket.get('key', '')}_{sub_sub_bucket.get('key', '')}"
+
+                        # 获取主数值
                         if primary_metric in sub_sub_bucket:
-                            inner_data[inner_key] = sub_sub_bucket[primary_metric]
+                            main_val = sub_sub_bucket[primary_metric]
                         elif 'metrics' in sub_sub_bucket and primary_metric in sub_sub_bucket['metrics']:
-                            inner_data[inner_key] = sub_sub_bucket['metrics'][primary_metric]
+                            main_val = sub_sub_bucket['metrics'][primary_metric]
                         else:
-                            inner_data[inner_key] = sub_sub_bucket.get('doc_count', 0)
+                            main_val = sub_sub_bucket.get('doc_count', 0)
+                        inner_data[inner_key] = main_val
+
+                        # 获取百分比
+                        pct_val = None
+                        if percentage_metric and percentage_metric in sub_sub_bucket:
+                            pct_val = sub_sub_bucket[percentage_metric]
+                        elif 'metrics' in sub_sub_bucket and percentage_metric and percentage_metric in sub_sub_bucket[
+                            'metrics']:
+                            pct_val = sub_sub_bucket['metrics'][percentage_metric]
+                        inner_percentage[inner_key] = pct_val
+
                         all_inner_keys.add(inner_key)
 
         # 标准两层嵌套处理
         for inner_bucket in inner_buckets:
             inner_key = str(inner_bucket.get('key', ''))
+
+            # 获取主数值
             if primary_metric in inner_bucket:
-                inner_data[inner_key] = inner_bucket[primary_metric]
+                main_val = inner_bucket[primary_metric]
             elif 'metrics' in inner_bucket and primary_metric in inner_bucket['metrics']:
-                inner_data[inner_key] = inner_bucket['metrics'][primary_metric]
+                main_val = inner_bucket['metrics'][primary_metric]
             else:
-                inner_data[inner_key] = inner_bucket.get('doc_count', 0)
+                main_val = inner_bucket.get('doc_count', 0)
+            inner_data[inner_key] = main_val
+
+            # 获取百分比
+            pct_val = None
+            if percentage_metric and percentage_metric in inner_bucket:
+                pct_val = inner_bucket[percentage_metric]
+            elif 'metrics' in inner_bucket and percentage_metric and percentage_metric in inner_bucket['metrics']:
+                pct_val = inner_bucket['metrics'][percentage_metric]
+            inner_percentage[inner_key] = pct_val
+
             all_inner_keys.add(inner_key)
 
         bucket_data_list.append({
-            'outer_key': outer_key,
+            'outer_key': outer_key,  # 现在作为列标签
             'inner_data': inner_data,
+            'inner_percentage': inner_percentage,
             'total_count': bucket.get('doc_count', 0)
         })
 
-    # 统一列顺序
+    # 统一行顺序（内层键作为行）
     all_inner_keys = sorted(list(all_inner_keys))
+    # 列顺序（外层桶keys）
+    outer_keys = [b['outer_key'] for b in bucket_data_list]
 
-    # 构建矩阵：行=外层桶，列=内层键
+    # 构建矩阵：行=内层桶，列=外层桶（转置）
     matrix = []
-    row_labels = []
+    annot_matrix = []  # 注释矩阵，用于显示"数值 (百分比)"
 
-    for bucket_data in bucket_data_list:
-        row_values = [bucket_data['inner_data'].get(k, 0) for k in all_inner_keys]
+    # 对每个内层键（行），收集所有外层桶（列）的数据
+    for inner_key in all_inner_keys:
+        row_values = []
+        row_annotations = []
+
+        for bucket_data in bucket_data_list:
+            main_val = bucket_data['inner_data'].get(inner_key, 0)
+            pct_val = bucket_data['inner_percentage'].get(inner_key)
+
+            row_values.append(main_val)
+
+            # 构建注释字符串
+            if pct_val is not None:
+                # 根据数值类型决定格式
+                if isinstance(pct_val, (int, float)):
+                    # 如果百分比值大于1，假设它已经是百分比形式（如6.5表示6.5%）
+                    # 如果小于1，假设它是小数形式（如0.065表示6.5%）
+                    if pct_val <= 1:
+                        display_pct = pct_val * 100
+                    else:
+                        display_pct = pct_val
+                    annot_str = f'{int(main_val)}\n({display_pct:.2f}%)'
+                else:
+                    annot_str = f'{int(main_val)}\n({pct_val}%)'
+            else:
+                annot_str = str(int(main_val))
+
+            row_annotations.append(annot_str)
+
         matrix.append(row_values)
-        row_labels.append(bucket_data['outer_key'])
+        annot_matrix.append(row_annotations)
 
-    df_pivot = pd.DataFrame(matrix, index=row_labels, columns=all_inner_keys)
+    # DataFrame：index=内层键（行/Y轴），columns=外层桶（列/X轴）
+    df_pivot = pd.DataFrame(matrix, index=all_inner_keys, columns=outer_keys)
 
-    sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
+    # 使用自定义注释矩阵，fmt='' 表示使用原始字符串格式
+    sns.heatmap(df_pivot, annot=annot_matrix, fmt='',
                 cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
                 linewidths=0.5, linecolor='gray')
 
-    # 通用标签设置，完全依赖metadata，无任何硬编码业务逻辑
+    # 设置标题
     ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
 
-    # X轴标签：优先使用metadata，其次尝试推断，但保持通用
+    # 设置轴标签：优先使用metadata，其次从query_config推断
+    # X轴标签：外层桶的field（如buckets中的field）或dimensions[1]（如果存在）
     xlabel = metadata.get('xlabel')
+    if not xlabel and buckets_config and len(buckets_config) > 0:
+        xlabel = buckets_config[0].get('field', '')
     if not xlabel and len(dimensions) > 1:
         xlabel = dimensions[1]
+    elif not xlabel and len(dimensions) > 0:
+        xlabel = dimensions[0]
     if xlabel:
         ax.set_xlabel(xlabel, fontsize=12)
 
-    # Y轴标签：优先使用metadata，其次尝试推断，但保持通用
+    # Y轴标签：优先使用dimensions[0]（分析目标），其次是metrics_field，然后是groups
     ylabel = metadata.get('ylabel')
-    if not ylabel and len(dimensions) > 0:
-        ylabel = dimensions[0]
+    if not ylabel:
+        if len(dimensions) > 0:
+            ylabel = dimensions[0]
+        elif metrics_field:
+            ylabel = metrics_field
+        elif len(groups) > 0:
+            ylabel = groups[0]
     if ylabel:
         ax.set_ylabel(ylabel, fontsize=12)
 
@@ -538,7 +683,6 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
     plt.close()
 
     return filepath
-
 def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count'):
     """Plot histogram with axis labels from metadata"""
     if 'level' in df.columns:
