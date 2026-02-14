@@ -395,11 +395,177 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
     return filepath
 
 
+# def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
+#                  metadata: Dict[str, str], save_dir: str) -> str:
+#     """
+#     通用热力图绘制函数：处理交叉分组结构（如 疾病状态 × 年龄 × 性别）
+#     颜色映射基于：风险组(key较大者) / (风险组 + 对照组(key较小者)) 的比例
+#     """
+#     buckets = result_json.get('buckets', [])
+#     if not buckets:
+#         return None
+#
+#     dimensions = query_config.get('dimensions', [])
+#     groups = query_config.get('groups', [])
+#     metrics = query_config.get('metrics', ['count', 'percentage'])
+#     metrics_field = query_config.get('metrics_field', '')
+#     buckets_config = query_config.get('buckets', [])
+#
+#     primary_metric = metrics[0] if metrics else 'count'
+#
+#     # 通用轴标签确定
+#     xlabel = metadata.get('xlabel')
+#     if not xlabel and buckets_config and len(buckets_config) > 0:
+#         xlabel = buckets_config[0].get('field', '')
+#
+#     ylabel = metadata.get('ylabel')
+#     if not ylabel and len(dimensions) > 0:
+#         ylabel = dimensions[0]
+#     elif not ylabel and metrics_field:
+#         ylabel = metrics_field
+#
+#     # 收集所有外层分组key并排序
+#     outer_keys = []
+#     for bucket in buckets:
+#         key_val = bucket.get('key')
+#         if key_val is not None:
+#             outer_keys.append(str(key_val))
+#
+#     if len(outer_keys) < 2:
+#         return _plot_single_layer_heatmap(buckets, query_config, metadata, save_dir,
+#                                           xlabel, ylabel, primary_metric, None)
+#
+#     outer_keys_sorted = sorted(outer_keys, key=lambda x: _natural_sort_key(x))
+#     baseline_key = outer_keys_sorted[0]
+#     risk_key = outer_keys_sorted[-1]
+#
+#     outer_buckets_map = {}
+#     for bucket in buckets:
+#         key_str = str(bucket.get('key'))
+#         outer_buckets_map[key_str] = bucket
+#
+#     # 收集X轴和Y轴类别
+#     x_categories = set()
+#     y_categories = set()
+#     data_map = {}
+#
+#     for outer_key, outer_bucket in outer_buckets_map.items():
+#         sub_ags = outer_bucket.get('sub_aggregations', {})
+#         x_buckets = sub_ags.get('buckets', [])
+#
+#         for x_bucket in x_buckets:
+#             x_key = str(x_bucket.get('key', ''))
+#             x_categories.add(x_key)
+#
+#             y_sub_ags = x_bucket.get('sub_aggregations', {})
+#             y_buckets = y_sub_ags.get('buckets', [])
+#
+#             for y_bucket in y_buckets:
+#                 y_key = str(y_bucket.get('key', ''))
+#                 y_categories.add(y_key)
+#
+#                 if primary_metric in y_bucket:
+#                     val = y_bucket[primary_metric]
+#                 elif 'metrics' in y_bucket and primary_metric in y_bucket['metrics']:
+#                     val = y_bucket['metrics'][primary_metric]
+#                 else:
+#                     val = y_bucket.get('doc_count', 0)
+#
+#                 coord = (x_key, y_key)
+#                 if coord not in data_map:
+#                     data_map[coord] = {}
+#                 data_map[coord][outer_key] = val
+#
+#     if not x_categories or not y_categories:
+#         return _plot_single_layer_heatmap(buckets, query_config, metadata, save_dir,
+#                                           xlabel, ylabel, primary_metric, None)
+#
+#     x_categories = sorted(list(x_categories), key=lambda x: _natural_sort_key(x))
+#     y_categories = sorted(list(y_categories), key=lambda x: _natural_sort_key(x))
+#
+#     # 构建矩阵
+#     color_matrix = []
+#     annot_matrix = []
+#
+#     for y_key in y_categories:
+#         color_row = []
+#         annot_row = []
+#
+#         for x_key in x_categories:
+#             coord = (x_key, y_key)
+#
+#             if coord in data_map:
+#                 baseline_val = data_map[coord].get(baseline_key, 0)
+#                 risk_val = data_map[coord].get(risk_key, 0)
+#                 total = baseline_val + risk_val
+#
+#                 if total > 0:
+#                     risk_pct = risk_val / total
+#                 else:
+#                     risk_pct = 0
+#             else:
+#                 baseline_val = 0
+#                 risk_val = 0
+#                 total = 0
+#                 risk_pct = 0
+#
+#             color_row.append(risk_pct)
+#
+#             if total > 0:
+#                 annot_str = f'{int(risk_val)}/{int(total)}\n({risk_pct * 100:.2f}%)'
+#             else:
+#                 annot_str = '0'
+#             annot_row.append(annot_str)
+#
+#         color_matrix.append(color_row)
+#         annot_matrix.append(annot_row)
+#
+#     # 创建图形
+#     fig, ax = plt.subplots(figsize=(max(10, len(x_categories) * 1.5), max(8, len(y_categories) * 1.2)))
+#
+#     df_color = pd.DataFrame(color_matrix, index=y_categories, columns=x_categories)
+#
+#     # 绘制热力图，获取colorbar对象
+#     cbar_label = f'Risk Percentage ({risk_key} vs {baseline_key})'
+#
+#     heatmap = sns.heatmap(df_color, annot=annot_matrix, fmt='',
+#                           cmap='Reds',
+#                           vmin=0, vmax=1,
+#                           ax=ax,
+#                           cbar_kws={'label': cbar_label},
+#                           linewidths=0.5,
+#                           linecolor='gray')
+#
+#     # 关键修改：自定义colorbar刻度为百分比格式
+#     cbar = heatmap.collections[0].colorbar
+#     cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+#     cbar.set_ticklabels(['0%', '20%', '40%', '60%', '80%', '100%'])
+#
+#     ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
+#
+#     if xlabel:
+#         ax.set_xlabel(xlabel, fontsize=12)
+#     if ylabel:
+#         ax.set_ylabel(ylabel, fontsize=12)
+#
+#     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+#     ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+#
+#     plt.tight_layout()
+#     filename = generate_random_filename(8)
+#     filepath = os.path.join(save_dir, filename)
+#     plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+#     plt.close()
+#
+#     return filepath
+
+
 def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
                  metadata: Dict[str, str], save_dir: str) -> str:
     """
     通用热力图绘制函数：处理交叉分组结构（如 疾病状态 × 年龄 × 性别）
     颜色映射基于：风险组(key较大者) / (风险组 + 对照组(key较小者)) 的比例
+    颜色范围动态调整：以数据最大值为上限，增强低概率数据的区分度
     """
     buckets = result_json.get('buckets', [])
     if not buckets:
@@ -486,6 +652,7 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
     # 构建矩阵
     color_matrix = []
     annot_matrix = []
+    all_risk_pcts = []  # 收集所有风险百分比用于确定范围
 
     for y_key in y_categories:
         color_row = []
@@ -510,6 +677,7 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
                 risk_pct = 0
 
             color_row.append(risk_pct)
+            all_risk_pcts.append(risk_pct)
 
             if total > 0:
                 annot_str = f'{int(risk_val)}/{int(total)}\n({risk_pct * 100:.2f}%)'
@@ -520,26 +688,43 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
         color_matrix.append(color_row)
         annot_matrix.append(annot_row)
 
+    # 关键修改：动态确定颜色范围
+    # 下限始终为0，上限为数据最大值（至少保留一定最小范围避免除零）
+    vmin = 0
+    vmax = max(all_risk_pcts) if all_risk_pcts else 1.0
+
+    # 如果最大值太小（比如<0.01），设置一个最小范围保证可视性
+    # 或者如果所有值相同，设置一个默认范围
+    if vmax < 0.001:
+        vmax = 0.1  # 默认10%作为上限
+    elif vmax == 0:
+        vmax = 1.0  # 全零情况
+
     # 创建图形
     fig, ax = plt.subplots(figsize=(max(10, len(x_categories) * 1.5), max(8, len(y_categories) * 1.2)))
 
     df_color = pd.DataFrame(color_matrix, index=y_categories, columns=x_categories)
 
-    # 绘制热力图，获取colorbar对象
+    # 绘制热力图，使用动态范围
     cbar_label = f'Risk Percentage ({risk_key} vs {baseline_key})'
 
     heatmap = sns.heatmap(df_color, annot=annot_matrix, fmt='',
                           cmap='Reds',
-                          vmin=0, vmax=1,
+                          vmin=vmin, vmax=vmax,  # 动态范围
                           ax=ax,
                           cbar_kws={'label': cbar_label},
                           linewidths=0.5,
                           linecolor='gray')
 
-    # 关键修改：自定义colorbar刻度为百分比格式
+    # 自定义colorbar刻度：根据vmax动态生成
     cbar = heatmap.collections[0].colorbar
-    cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
-    cbar.set_ticklabels(['0%', '20%', '40%', '60%', '80%', '100%'])
+
+    # 生成5个均匀分布的刻度
+    tick_positions = [vmin + i * (vmax - vmin) / 4 for i in range(5)]
+    tick_labels = [f'{p * 100:.1f}%' for p in tick_positions]
+
+    cbar.set_ticks(tick_positions)
+    cbar.set_ticklabels(tick_labels)
 
     ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
 
@@ -558,7 +743,6 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
     plt.close()
 
     return filepath
-
 
 def _natural_sort_key(s):
     """辅助函数：自然排序，处理数字和字符串混合的情况"""
