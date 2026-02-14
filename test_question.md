@@ -42,6 +42,9 @@ Is there a correlation between different camera models and image focus quality o
 
 show the risk of  age-related macular degeneration different age groups (0-30, 30-50, 50-70, 70+ years)  heatmap
 
+
+show the risk of  age-related macular degeneration different age groups (0-30, 30-50, 50-70, 70+ years) different gender  heatmap
+
 Analyze patient distribution by age group(20-30, 30-40, 40-50...) and for each DR grade. histogram
 Analyze patient distribution by age group(20-30, 30-40, 40-50...) and for 3 DR grade(0,1,2). histogram
 Analyze patient distribution by age group(20-30, 30-40, 40-50...) and for each amd grade. histogram

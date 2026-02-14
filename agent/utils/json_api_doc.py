@@ -516,6 +516,304 @@ For time-based bucketing analysis
 }
 ```
 
+#### Example 7.2.6: AMD Risk Analysis by Age and Gender with Heatmap
+
+**Query Question**: Show the risk of age-related macular degeneration across different age groups (0-30, 30-50, 50-70, 70+ years) and different gender using a heatmap.
+
+**Query JSON**:
+```json
+{
+  "query": {
+    "type": "distribution",
+    "chart_type": "heatmap",
+    "config": {
+      "dimensions": [
+        "patient_sex"
+      ],
+      "groups": [
+        "amd"
+      ],
+      "buckets": [
+        {
+          "type": "range",
+          "field": "patient_age",
+          "ranges": [
+            {
+              "key": "0-30",
+              "from": 0,
+              "to": 30
+            },
+            {
+              "key": "30-50",
+              "from": 30,
+              "to": 50
+            },
+            {
+              "key": "50-70",
+              "from": 50,
+              "to": 70
+            },
+            {
+              "key": "70+",
+              "from": 70
+            }
+          ]
+        }
+      ],
+      "metrics": [
+        "count",
+        "percentage"
+      ],
+      "metrics_field": "amd",
+      "filters": []
+    }
+  }
+}
+```
+
+**Response JSON**:
+```json
+{
+  "buckets": [
+    {
+      "key": 0,
+      "doc_count": 15967,
+      "metrics": {
+        "count": 15967,
+        "percentage": 98.16
+      },
+      "sub_aggregations": {
+        "buckets": [
+          {
+            "key": "0-30",
+            "doc_count": 1058,
+            "from": 0.0,
+            "to": 30.0,
+            "metrics": {
+              "count": 1058,
+              "percentage": 6.63
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "2",
+                  "doc_count": 568,
+                  "metrics": {
+                    "count": 568,
+                    "percentage": 53.69
+                  }
+                },
+                {
+                  "key": "1",
+                  "doc_count": 490,
+                  "metrics": {
+                    "count": 490,
+                    "percentage": 46.31
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "30-50",
+            "doc_count": 2058,
+            "from": 30.0,
+            "to": 50.0,
+            "metrics": {
+              "count": 2058,
+              "percentage": 12.89
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "2",
+                  "doc_count": 1278,
+                  "metrics": {
+                    "count": 1278,
+                    "percentage": 62.1
+                  }
+                },
+                {
+                  "key": "1",
+                  "doc_count": 780,
+                  "metrics": {
+                    "count": 780,
+                    "percentage": 37.9
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "50-70",
+            "doc_count": 4538,
+            "from": 50.0,
+            "to": 70.0,
+            "metrics": {
+              "count": 4538,
+              "percentage": 28.42
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "2",
+                  "doc_count": 2829,
+                  "metrics": {
+                    "count": 2829,
+                    "percentage": 62.34
+                  }
+                },
+                {
+                  "key": "1",
+                  "doc_count": 1709,
+                  "metrics": {
+                    "count": 1709,
+                    "percentage": 37.66
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "70+",
+            "doc_count": 2932,
+            "from": 70.0,
+            "to": null,
+            "metrics": {
+              "count": 2932,
+              "percentage": 18.36
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "2",
+                  "doc_count": 1980,
+                  "metrics": {
+                    "count": 1980,
+                    "percentage": 67.53
+                  }
+                },
+                {
+                  "key": "1",
+                  "doc_count": 952,
+                  "metrics": {
+                    "count": 952,
+                    "percentage": 32.47
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "key": 1,
+      "doc_count": 299,
+      "metrics": {
+        "count": 299,
+        "percentage": 1.84
+      },
+      "sub_aggregations": {
+        "buckets": [
+          {
+            "key": "0-30",
+            "doc_count": 0,
+            "from": 0.0,
+            "to": 30.0,
+            "metrics": {
+              "count": 0,
+              "percentage": 0.0
+            }
+          },
+          {
+            "key": "30-50",
+            "doc_count": 0,
+            "from": 30.0,
+            "to": 50.0,
+            "metrics": {
+              "count": 0,
+              "percentage": 0.0
+            }
+          },
+          {
+            "key": "50-70",
+            "doc_count": 35,
+            "from": 50.0,
+            "to": 70.0,
+            "metrics": {
+              "count": 35,
+              "percentage": 11.71
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "1",
+                  "doc_count": 19,
+                  "metrics": {
+                    "count": 19,
+                    "percentage": 54.29
+                  }
+                },
+                {
+                  "key": "2",
+                  "doc_count": 16,
+                  "metrics": {
+                    "count": 16,
+                    "percentage": 45.71
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "70+",
+            "doc_count": 199,
+            "from": 70.0,
+            "to": null,
+            "metrics": {
+              "count": 199,
+              "percentage": 66.56
+            },
+            "sub_aggregations": {
+              "buckets": [
+                {
+                  "key": "2",
+                  "doc_count": 142,
+                  "metrics": {
+                    "count": 142,
+                    "percentage": 71.36
+                  }
+                },
+                {
+                  "key": "1",
+                  "doc_count": 57,
+                  "metrics": {
+                    "count": 57,
+                    "percentage": 28.64
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+**Response Structure Notes**:
+- The top-level `buckets` represent the `amd` (Age-related Macular Degeneration) groups:
+  - `key: 0` - No AMD (healthy)
+  - `key: 1` - Has AMD
+- Each AMD group contains nested `sub_aggregations.buckets` representing age ranges (0-30, 30-50, 50-70, 70+)
+- Within each age range, `sub_aggregations.buckets` represent gender distribution:
+  - `key: "1"` - Male
+  - `key: "2"` - Female
+- `metrics.percentage` shows the proportion within the parent group
+- `doc_count` provides absolute counts for each category
+
 ---
 
 ## 8. Response Format
@@ -655,8 +953,5 @@ For time-based bucketing analysis
 | Filters | 5-10 | 20 |
 | Buckets per aggregation | 100-1000 | 10000 |
 | Heatmap dimensions | 20x20 | 50x50 |
-
----
-
 
 """
