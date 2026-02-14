@@ -74,13 +74,18 @@ def extract_chart_metadata(query_json: Dict[str, Any], result_json: Dict[str, An
             metric_name = metrics[0] if metrics else 'count'
             metadata['ylabel'] = f"{metric_name.capitalize()}{f' of {metrics_field}' if metrics_field else ''}"
         elif chart_type == 'pie':
+            # Pie charts typically don't need axis labels
             metadata['title'] = f"Distribution of {dimensions[0] if dimensions else 'Categories'}"
         elif chart_type == 'heatmap':
-            # 热力图：x轴是dimension（AMD状态），y轴是bucket（年龄组）
-            if dimensions:
-                metadata['xlabel'] = dimensions[0]  # amd
-            metadata['ylabel'] = 'Age Groups'
-            metadata['title'] = f"Risk of {dimensions[0].upper() if dimensions else 'Disease'} by Age Group"
+            # 热力图：x轴是第一个dimension，y轴是第二个dimension（或group）
+            if len(dimensions) >= 2:
+                metadata['xlabel'] = dimensions[1]  # artifacts
+                metadata['ylabel'] = dimensions[0]  # focus
+            elif len(dimensions) == 1 and len(groups) >= 1:
+                metadata['xlabel'] = dimensions[0]
+                metadata['ylabel'] = groups[0]
+            # 热力图标题特殊处理
+            metadata['title'] = f"Heatmap: {' vs '.join(dimensions)} by {groups[0] if groups else 'Group'}"
 
     metadata['title'] = ' | '.join(title_parts) if title_parts else 'OpenSearch Analysis Visualization'
 
@@ -180,16 +185,18 @@ def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any], cha
     # Check if single layer (no parent keys)
     parent_cols = [c for c in df.columns if c.startswith('level_') or c.startswith('group_')]
     if not parent_cols:
+        # Check if has percentage for pie combo
         if 'percentage' in df.columns or 'metrics' in str(df.to_dict()):
             return 'bar_with_pie'
         return 'single_bar'
 
-    # Check outer buckets count
+    # Check outer buckets count (level_0_group indicates outer grouping)
     if 'level_0_group' in df.columns:
         outer_groups = df['level_0_group'].nunique()
         if outer_groups > 1:
             return 'grouped_bar'
         else:
+            # Only one outer group (likely due to filter), flatten to single bar
             return 'single_bar'
 
     return 'single_bar'
@@ -204,6 +211,7 @@ def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metr
     values = df[primary_metric].values
     keys = df['key'].astype(str).values
 
+    # Limit categories if too many
     if len(keys) > 15:
         sorted_idx = np.argsort(values)[::-1]
         top_n = 14
@@ -216,14 +224,17 @@ def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metr
     colors = sns.color_palette("husl", len(keys))
 
     if show_pie and len(keys) <= 10:
+        # Create two subplots side by side
         ax.set_visible(False)
         ax1 = ax.figure.add_subplot(121)
         ax2 = ax.figure.add_subplot(122)
 
+        # Bar chart with metadata labels
         bars = ax1.bar(keys, values, color=colors, alpha=0.8)
         ax1.set_xticks(range(len(keys)))
         ax1.set_xticklabels(keys, rotation=45, ha='right')
 
+        # 使用 metadata 中的标签
         if metadata.get('xlabel'):
             ax1.set_xlabel(metadata['xlabel'], fontsize=11)
         if metadata.get('ylabel'):
@@ -231,11 +242,13 @@ def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metr
         else:
             ax1.set_ylabel(primary_metric.capitalize(), fontsize=11)
 
+        # Add value labels on bars
         for bar in bars:
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width() / 2., height,
                      f'{int(height)}', ha='center', va='bottom', fontsize=9)
 
+        # Pie chart
         wedges, texts, autotexts = ax2.pie(values, labels=keys, autopct='%1.1f%%',
                                            startangle=90, colors=colors)
         for autotext in autotexts:
@@ -244,10 +257,12 @@ def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metr
         ax2.set_title(f'{metadata.get("title", "Distribution")} (Pie View)', fontsize=11)
 
     else:
+        # Simple bar chart with metadata labels
         bars = ax.bar(keys, values, color=colors, alpha=0.8)
         ax.set_xticks(range(len(keys)))
         ax.set_xticklabels(keys, rotation=45, ha='right')
 
+        # 设置横纵坐标标签
         if metadata.get('xlabel'):
             ax.set_xlabel(metadata['xlabel'], fontsize=12)
         if metadata.get('ylabel'):
@@ -255,6 +270,7 @@ def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metr
         else:
             ax.set_ylabel(primary_metric.capitalize(), fontsize=12)
 
+        # Add value labels
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2., height,
@@ -308,6 +324,7 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
             colors = sns.color_palette("husl", len(keys))
             bars = ax.bar(keys, values, color=colors, alpha=0.8)
 
+            # Add value labels
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2., height,
@@ -317,6 +334,7 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
             ax.set_xticks(range(len(keys)))
             ax.set_xticklabels(keys, rotation=45, ha='right')
 
+            # 设置横纵坐标标签：使用 metadata 或根据配置生成
             if metadata.get('xlabel'):
                 ax.set_xlabel(metadata['xlabel'], fontsize=11)
             else:
@@ -334,8 +352,9 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
         if n_plots > 1:
             axes[idx].axis('off')
 
+    # 添加总标题
     fig.suptitle(metadata.get('title', 'OpenSearch Analysis'), fontsize=14, fontweight='bold', y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # 为 suptitle 留出空间
 
     filename = generate_random_filename(8)
     filepath = os.path.join(save_dir, filename)
@@ -348,9 +367,12 @@ def plot_grouped_bar(result_json: Dict[str, Any], query_config: Dict[str, Any],
 def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
                  metadata: Dict[str, str], save_dir: str) -> str:
     """
-    绘制热力图：支持两种数据结构
-    1. 三层嵌套: camera × focus × artifacts (原有)
-    2. 两层嵌套: age_group × amd_status (新增，用于AMD风险分析)
+    通用热力图绘制函数：处理任意两层嵌套桶结构
+    外层桶 -> 行 (Y轴)
+    内层桶 -> 列 (X轴)
+    数值 -> 单元格颜色强度
+
+    注意：始终生成单张热力图，不使用子图
     """
     buckets = result_json.get('buckets', [])
     if not buckets:
@@ -360,188 +382,156 @@ def plot_heatmap(result_json: Dict[str, Any], query_config: Dict[str, Any],
     metrics = query_config.get('metrics', ['count', 'percentage'])
     primary_metric = metrics[0] if metrics else 'count'
 
-    # 判断数据结构类型
-    # 检查第一层bucket是否有range特征（年龄分组）
-    is_age_structure = any(is_range_bucket(b) for b in buckets)
+    # 判断数据结构：单层分组还是双层分组
+    has_nested = False
+    for bucket in buckets:
+        sub_ags = bucket.get('sub_aggregations', {})
+        if sub_ags and 'buckets' in sub_ags and len(sub_ags['buckets']) > 0:
+            has_nested = True
+            break
+        dims = bucket.get('dimensions', {})
+        if dims:
+            for dim_data in dims.values():
+                if dim_data.get('buckets'):
+                    has_nested = True
+                    break
+        if has_nested:
+            break
 
-    if is_age_structure:
-        # 结构: 年龄组 × AMD状态 (两层嵌套)
-        return plot_heatmap_age_amd(buckets, dimensions, primary_metric, metadata, save_dir)
-    else:
-        # 结构: Camera × Focus × Artifacts (三层嵌套)
-        return plot_heatmap_camera_focus_artifacts(buckets, query_config, dimensions,
-                                                   primary_metric, metadata, save_dir)
+    # 单层数据：创建1xN矩阵
+    if not has_nested:
+        fig, ax = plt.subplots(figsize=(10, 6))
 
+        row_labels = ['Value']
+        col_labels = [str(b.get('key', '')) for b in buckets]
 
-def plot_heatmap_age_amd(buckets: List[Dict], dimensions: List[str],
-                         primary_metric: str, metadata: Dict[str, str],
-                         save_dir: str) -> str:
-    """
-    绘制年龄组 × AMD状态 的热力图
-    显示每个年龄组的AMD风险百分比
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
+        values = []
+        for bucket in buckets:
+            if primary_metric in bucket:
+                values.append(bucket[primary_metric])
+            elif 'metrics' in bucket and primary_metric in bucket['metrics']:
+                values.append(bucket['metrics'][primary_metric])
+            else:
+                values.append(bucket.get('doc_count', 0))
 
-    # 准备数据：行=年龄组，列=AMD状态(0/1)
-    age_groups = []
-    amd_labels = ['No AMD', 'AMD']  # 假设0=无，1=有
-    data_matrix = []
+        matrix = [values]
+        df_pivot = pd.DataFrame(matrix, index=row_labels, columns=col_labels)
+
+        sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
+                    cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
+                    linewidths=0.5, linecolor='gray')
+
+        ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
+
+        if metadata.get('xlabel'):
+            ax.set_xlabel(metadata['xlabel'], fontsize=12)
+        if metadata.get('ylabel'):
+            ax.set_ylabel(metadata['ylabel'], fontsize=12)
+
+        plt.tight_layout()
+        filename = generate_random_filename(8)
+        filepath = os.path.join(save_dir, filename)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        return filepath
+
+    # 双层数据：始终合并成单个大矩阵，不使用子图
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # 收集所有可能的内层键（用于统一列顺序）
+    all_inner_keys = set()
+    bucket_data_list = []
 
     for bucket in buckets:
-        age_key = bucket.get('key', '')
-        age_groups.append(age_key)
+        outer_key = str(bucket.get('key', ''))
+        inner_data = {}
 
-        # 获取该年龄组的AMD分布
+        # 尝试多种嵌套格式
         sub_ags = bucket.get('sub_aggregations', {})
-        amd_buckets = sub_ags.get('buckets', [])
+        inner_buckets = sub_ags.get('buckets', []) if sub_ags else []
 
-        row_data = {}
-        total_count = bucket.get('doc_count', 0)
+        if not inner_buckets:
+            dims = bucket.get('dimensions', {})
+            if dims and dimensions:
+                inner_buckets = dims.get(dimensions[0], {}).get('buckets', [])
 
-        for amd_bucket in amd_buckets:
-            amd_status = str(amd_bucket.get('key', ''))
+        # 处理三层嵌套（展平）
+        if not inner_buckets:
+            for sub_bucket in sub_ags.get('buckets', []):
+                sub_sub_ags = sub_bucket.get('sub_aggregations', {})
+                if sub_sub_ags and 'buckets' in sub_sub_ags:
+                    for sub_sub_bucket in sub_sub_ags['buckets']:
+                        inner_key = f"{sub_bucket.get('key', '')}_{sub_sub_bucket.get('key', '')}"
+                        if primary_metric in sub_sub_bucket:
+                            inner_data[inner_key] = sub_sub_bucket[primary_metric]
+                        elif 'metrics' in sub_sub_bucket and primary_metric in sub_sub_bucket['metrics']:
+                            inner_data[inner_key] = sub_sub_bucket['metrics'][primary_metric]
+                        else:
+                            inner_data[inner_key] = sub_sub_bucket.get('doc_count', 0)
+                        all_inner_keys.add(inner_key)
 
-            # 获取百分比（优先使用内层percentage，表示该AMD状态在年龄组内的占比）
-            if 'metrics' in amd_bucket and 'percentage' in amd_bucket['metrics']:
-                value = amd_bucket['metrics']['percentage']
-            elif 'percentage' in amd_bucket:
-                value = amd_bucket['percentage']
-            elif primary_metric in amd_bucket:
-                value = amd_bucket[primary_metric]
-            elif 'metrics' in amd_bucket and primary_metric in amd_bucket['metrics']:
-                value = amd_bucket['metrics'][primary_metric]
+        # 标准两层嵌套处理
+        for inner_bucket in inner_buckets:
+            inner_key = str(inner_bucket.get('key', ''))
+            if primary_metric in inner_bucket:
+                inner_data[inner_key] = inner_bucket[primary_metric]
+            elif 'metrics' in inner_bucket and primary_metric in inner_bucket['metrics']:
+                inner_data[inner_key] = inner_bucket['metrics'][primary_metric]
             else:
-                value = amd_bucket.get('doc_count', 0)
+                inner_data[inner_key] = inner_bucket.get('doc_count', 0)
+            all_inner_keys.add(inner_key)
 
-            row_data[amd_status] = value
+        bucket_data_list.append({
+            'outer_key': outer_key,
+            'inner_data': inner_data,
+            'total_count': bucket.get('doc_count', 0)
+        })
 
-        # 确保有两列数据（0和1）
-        row_values = [row_data.get('0', 0), row_data.get('1', 0)]
-        data_matrix.append(row_values)
+    # 统一列顺序
+    all_inner_keys = sorted(list(all_inner_keys))
 
-    # 创建DataFrame
-    df_pivot = pd.DataFrame(data_matrix,
-                            index=age_groups,
-                            columns=['No AMD (0)', 'AMD (1)'])
+    # 构建矩阵：行=外层桶，列=内层键
+    matrix = []
+    row_labels = []
 
-    # 绘制热力图
-    sns.heatmap(df_pivot, annot=True, fmt='.2f', cmap='RdYlBu_r',
-                ax=ax, cbar_kws={'label': 'Percentage (%)'},
-                linewidths=1, linecolor='white', vmin=0, vmax=100)
+    for bucket_data in bucket_data_list:
+        row_values = [bucket_data['inner_data'].get(k, 0) for k in all_inner_keys]
+        matrix.append(row_values)
+        row_labels.append(bucket_data['outer_key'])
 
-    # 设置标签
-    ax.set_title(metadata.get('title', 'AMD Risk by Age Group'),
-                 fontsize=14, fontweight='bold', pad=20)
-    ax.set_xlabel(metadata.get('xlabel', 'AMD Status'), fontsize=12)
-    ax.set_ylabel(metadata.get('ylabel', 'Age Groups'), fontsize=12)
+    df_pivot = pd.DataFrame(matrix, index=row_labels, columns=all_inner_keys)
 
-    # 旋转标签
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
+    sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
+                cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
+                linewidths=0.5, linecolor='gray')
+
+    # 通用标签设置，完全依赖metadata，无任何硬编码业务逻辑
+    ax.set_title(metadata.get('title', 'Heatmap Analysis'), fontsize=14, fontweight='bold')
+
+    # X轴标签：优先使用metadata，其次尝试推断，但保持通用
+    xlabel = metadata.get('xlabel')
+    if not xlabel and len(dimensions) > 1:
+        xlabel = dimensions[1]
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=12)
+
+    # Y轴标签：优先使用metadata，其次尝试推断，但保持通用
+    ylabel = metadata.get('ylabel')
+    if not ylabel and len(dimensions) > 0:
+        ylabel = dimensions[0]
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=12)
+
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
     ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
 
     plt.tight_layout()
-
     filename = generate_random_filename(8)
     filepath = os.path.join(save_dir, filename)
     plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
 
     return filepath
-
-
-def plot_heatmap_camera_focus_artifacts(buckets: List[Dict], query_config: Dict[str, Any],
-                                        dimensions: List[str], primary_metric: str,
-                                        metadata: Dict[str, str], save_dir: str) -> str:
-    """
-    原有的三层嵌套热力图：Camera × Focus × Artifacts
-    """
-    group_field = query_config.get('groups', ['camera'])[0] if query_config.get('groups') else 'camera'
-
-    n_plots = len(buckets)
-    n_cols = min(2, n_plots)
-    n_rows = (n_plots + n_cols - 1) // n_cols
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 6 * n_rows))
-    if n_plots == 1:
-        axes = [axes]
-    else:
-        axes = axes.flatten() if n_plots > 1 else [axes]
-
-    for idx, bucket in enumerate(buckets):
-        ax = axes[idx] if n_plots > 1 else axes[0]
-        camera_model = bucket.get('key', f'Camera {idx}')
-
-        pivot_data = {}
-        focus_labels = set()
-        artifact_labels = set()
-
-        sub_ags = bucket.get('sub_aggregations', {})
-        focus_buckets = sub_ags.get('buckets', [])
-
-        for focus_bucket in focus_buckets:
-            focus_key = str(focus_bucket.get('key', ''))
-            focus_labels.add(focus_key)
-
-            sub_sub_ags = focus_bucket.get('sub_aggregations', {})
-            artifact_buckets = sub_sub_ags.get('buckets', [])
-
-            for artifact_bucket in artifact_buckets:
-                artifact_key = str(artifact_bucket.get('key', ''))
-                artifact_labels.add(artifact_key)
-
-                if primary_metric in artifact_bucket:
-                    value = artifact_bucket[primary_metric]
-                elif 'metrics' in artifact_bucket and primary_metric in artifact_bucket['metrics']:
-                    value = artifact_bucket['metrics'][primary_metric]
-                else:
-                    value = artifact_bucket.get('doc_count', 0)
-
-                if focus_key not in pivot_data:
-                    pivot_data[focus_key] = {}
-                pivot_data[focus_key][artifact_key] = value
-
-        if pivot_data:
-            focus_labels = sorted(list(focus_labels))
-            artifact_labels = sorted(list(artifact_labels))
-
-            matrix = []
-            for focus in focus_labels:
-                row = []
-                for artifact in artifact_labels:
-                    row.append(pivot_data.get(focus, {}).get(artifact, 0))
-                matrix.append(row)
-
-            df_pivot = pd.DataFrame(matrix, index=focus_labels, columns=artifact_labels)
-
-            sns.heatmap(df_pivot, annot=True, fmt='.0f' if primary_metric == 'count' else '.2f',
-                        cmap='YlOrRd', ax=ax, cbar_kws={'label': primary_metric.capitalize()},
-                        linewidths=0.5, linecolor='gray')
-
-            ax.set_title(f'{camera_model}\n(n={bucket.get("doc_count", 0)})',
-                         fontsize=12, fontweight='bold')
-            ax.set_xlabel(dimensions[1] if len(dimensions) > 1 else 'Artifacts', fontsize=11)
-            ax.set_ylabel(dimensions[0] if len(dimensions) > 0 else 'Focus', fontsize=11)
-
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
-            ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
-        else:
-            ax.text(0.5, 0.5, f'No data for {camera_model}',
-                    ha='center', va='center', transform=ax.transAxes)
-
-    for idx in range(n_plots, len(axes)):
-        axes[idx].axis('off')
-
-    fig.suptitle(metadata.get('title', f'Heatmap Analysis by {group_field.capitalize()}'),
-                 fontsize=14, fontweight='bold', y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-    filename = generate_random_filename(8)
-    filepath = os.path.join(save_dir, filename)
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
-    plt.close()
-
-    return filepath
-
 
 def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count'):
     """Plot histogram with axis labels from metadata"""
@@ -559,6 +549,7 @@ def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metri
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha='right')
 
+    # 设置横纵坐标标签
     if metadata.get('xlabel'):
         ax.set_xlabel(metadata['xlabel'], fontsize=12)
     else:
@@ -569,6 +560,7 @@ def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metri
     else:
         ax.set_ylabel('Count', fontsize=12)
 
+    # Add value labels
     for i, v in enumerate(values):
         ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontsize=9)
 
@@ -580,6 +572,7 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
     metrics = query_config.get('metrics', ['min', 'max', 'avg', 'count'])
 
     if chart_type == 'histogram':
+        # For histogram: show metrics distribution across fields
         field_labels = []
         metric_data = {m: [] for m in metrics}
 
@@ -603,13 +596,16 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
         ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
 
     elif chart_type == 'bar':
+        # Bar chart comparing specific metric across fields, or all metrics for one field
         if len(fields) > 1:
+            # Compare first metric across all fields
             metric = metrics[0] if metrics else 'avg'
             values = [result_json.get(f, {}).get(metric, 0) for f in fields]
             colors = sns.color_palette("husl", len(fields))
             ax.bar(fields, values, color=colors, alpha=0.8)
             ax.set_ylabel(f'{metric.capitalize()} Value')
         else:
+            # Show all metrics for single field
             field = fields[0]
             values = [result_json.get(field, {}).get(m, 0) for m in metrics]
             ax.bar(metrics, values, color='steelblue', alpha=0.8)
@@ -617,6 +613,7 @@ def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, An
         ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
 
     elif chart_type == 'heatmap':
+        # Stats类型的热力图（如果有矩阵数据）
         ax.text(0.5, 0.5, 'Heatmap for stats type not implemented\n(Use distribution type for heatmap)',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12)
         ax.set_title(metadata['title'], fontsize=14, fontweight='bold')
@@ -630,6 +627,7 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
     filename = generate_random_filename(8)
     filepath = os.path.join(save_dir, filename)
 
+    # 提取元数据（标题、横纵坐标标签）
     metadata = extract_chart_metadata(query_json, result_json)
 
     query = query_json.get('query', {})
@@ -661,13 +659,18 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
         plt.close()
         return filepath
 
+    # 关键修复：传递 chart_type 给 determine_chart_strategy
     strategy = determine_chart_strategy(df, config, chart_type)
 
     # 如果是明确的热力图请求，强制使用heatmap策略
     if chart_type == 'heatmap':
         strategy = 'heatmap'
 
+    # 注意：这里移除了强制覆盖heatmap策略的逻辑
+    # 之前的代码在这里会检查range bucket并覆盖strategy，现在不再这样做
+
     try:
+        # 新增：热力图分支
         if strategy == 'heatmap':
             filepath = plot_heatmap(result_json, config, metadata, save_dir)
             return filepath
@@ -692,6 +695,7 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
             else:
                 plot_single_bar(ax, df, metadata, primary_metric, show_pie=False)
 
+            # 设置标题和轴标签
             ax.set_title(metadata['title'], fontsize=14, fontweight='bold', pad=20)
             if metadata.get('xlabel'):
                 ax.set_xlabel(metadata['xlabel'], fontsize=12)
@@ -717,13 +721,13 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
 
 
 if __name__ == "__main__":
-    # 测试您的AMD数据
+    # 测试AMD年龄分布热力图
     test_query = {
         "query": {
             "type": "distribution",
             "chart_type": "heatmap",
             "config": {
-                "dimensions": ["amd"],
+                "dimensions": ["patient_age", "amd"],
                 "buckets": [
                     {
                         "type": "range",
