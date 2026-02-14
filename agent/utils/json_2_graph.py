@@ -175,6 +175,13 @@ def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any], cha
     if chart_type == 'heatmap':
         return 'heatmap'
 
+    # 新增：如果明确指定了histogram且有嵌套结构，使用叠加直方图
+    if chart_type == 'histogram':
+        # 检查是否有嵌套结构（用于叠加显示）
+        parent_cols = [c for c in df.columns if c.startswith('level_') or c.startswith('group_')]
+        if parent_cols or 'level_0_group' in df.columns:
+            return 'stacked_histogram'
+
     if df.empty:
         return 'single_bar'
 
@@ -200,7 +207,6 @@ def determine_chart_strategy(df: pd.DataFrame, query_config: Dict[str, Any], cha
             return 'single_bar'
 
     return 'single_bar'
-
 
 def plot_single_bar(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metric: str = 'doc_count',
                     show_pie: bool = False):
@@ -565,6 +571,295 @@ def plot_histogram(ax, df: pd.DataFrame, metadata: Dict[str, str], primary_metri
         ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontsize=9)
 
 
+def plot_stacked_histogram(result_json: Dict[str, Any], query_config: Dict[str, Any],
+                           metadata: Dict[str, str], save_dir: str) -> str:
+    """
+    通用半透明叠加直方图，支持Y轴截断+断裂标记以处理组内极端值
+    """
+    buckets = result_json.get('buckets', [])
+    if not buckets:
+        return None
+
+    dimensions = query_config.get('dimensions', [])
+    metrics = query_config.get('metrics', ['count'])
+    primary_metric = metrics[0] if metrics else 'doc_count'
+
+    # 数据解析
+    outer_keys = []
+    inner_keys_set = set()
+    data_matrix = {}
+
+    for bucket in buckets:
+        outer_key = str(bucket.get('key', ''))
+        outer_keys.append(outer_key)
+        data_matrix[outer_key] = {}
+
+        sub_ags = bucket.get('sub_aggregations', {})
+        inner_buckets = sub_ags.get('buckets', []) if sub_ags else []
+
+        if not inner_buckets and dimensions:
+            dims = bucket.get('dimensions', {})
+            if dims:
+                inner_buckets = dims.get(dimensions[0], {}).get('buckets', [])
+
+        if not inner_buckets:
+            groups = bucket.get('groups', {})
+            for group_name, group_data in groups.items():
+                inner_buckets.extend(group_data.get('buckets', []))
+
+        for inner_bucket in inner_buckets:
+            inner_key = str(inner_bucket.get('key', ''))
+            inner_keys_set.add(inner_key)
+
+            if primary_metric in inner_bucket:
+                value = inner_bucket[primary_metric]
+            elif 'metrics' in inner_bucket and primary_metric in inner_bucket['metrics']:
+                value = inner_bucket['metrics'][primary_metric]
+            else:
+                value = inner_bucket.get('doc_count', 0)
+
+            data_matrix[outer_key][inner_key] = value
+
+    if not inner_keys_set:
+        fig, ax = plt.subplots(figsize=(12, 7))
+        values = [sum(data_matrix[k].values()) if data_matrix[k] else 0 for k in outer_keys]
+
+        bars = ax.bar(range(len(outer_keys)), values, alpha=0.8, edgecolor='black', color='steelblue')
+        ax.set_xticks(range(len(outer_keys)))
+        ax.set_xticklabels(outer_keys, rotation=45, ha='right')
+
+        if metadata.get('xlabel'):
+            ax.set_xlabel(metadata['xlabel'], fontsize=12)
+        if metadata.get('ylabel'):
+            ax.set_ylabel(metadata['ylabel'], fontsize=12)
+        ax.set_title(metadata.get('title', 'Histogram'), fontsize=14, fontweight='bold')
+
+        plt.tight_layout()
+        filename = generate_random_filename(8)
+        filepath = os.path.join(save_dir, filename)
+        plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        return filepath
+
+    inner_keys = sorted(list(inner_keys_set))
+    colors = sns.color_palette("Set1", len(inner_keys))
+
+    # 关键修改：检查组内差异而非全局差异
+    # 计算每个组内的最大/次大比值，取最小值作为判断依据
+    # 如果任一组内存在极端差异，就启用截断
+    group_ratios = []
+    group_second_maxs = []
+
+    for outer_key in outer_keys:
+        group_values = sorted([data_matrix[outer_key].get(k, 0) for k in inner_keys], reverse=True)
+        if len(group_values) >= 2 and group_values[1] > 0:
+            ratio = group_values[0] / group_values[1]
+            group_ratios.append(ratio)
+            group_second_maxs.append(group_values[1])
+
+    # 使用最小的比值（最极端的情况）作为判断标准
+    # 或者使用所有组中第二大的最大值作为截断参考
+    BREAK_THRESHOLD = 3.0
+
+    if group_ratios:
+        min_ratio = min(group_ratios)
+        # 截断点：基于所有组中第二大的最大值，留一些余量
+        reference_second_max = max(group_second_maxs) if group_second_maxs else 100
+    else:
+        min_ratio = 1.0
+        reference_second_max = 100
+
+    # 触发条件：任一组内最大/次大超过阈值
+    use_break = min_ratio > BREAK_THRESHOLD
+
+    if use_break:
+        # 截断点略高于参考次大值
+        break_point = reference_second_max * 1.3
+        return _plot_broken_axis_histogram(outer_keys, inner_keys, data_matrix, colors,
+                                           metadata, save_dir, primary_metric, break_point)
+    else:
+        return _plot_standard_overlay(outer_keys, inner_keys, data_matrix, colors,
+                                      metadata, save_dir, primary_metric)
+
+
+def _plot_broken_axis_histogram(outer_keys, inner_keys, data_matrix, colors,
+                                metadata, save_dir, primary_metric, break_point):
+    """
+    截断Y轴叠加直方图：通过断裂标记处理组内极端值
+    """
+    # 计算全局最大值用于顶部子图范围
+    all_values = []
+    for outer_key in outer_keys:
+        for inner_key in inner_keys:
+            all_values.append(data_matrix[outer_key].get(inner_key, 0))
+    global_max = max(all_values) if all_values else break_point * 2
+    top_margin = global_max * 1.05
+
+    fig, (ax_top, ax_bottom) = plt.subplots(2, 1, sharex=True,
+                                            figsize=(14, 10),
+                                            gridspec_kw={'height_ratios': [1, 3]})
+
+    x_pos = np.arange(len(outer_keys))
+    bar_width = 0.6
+
+    # 在两个子图中绘制相同的柱子
+    for i, inner_key in enumerate(inner_keys):
+        values = [data_matrix[outer_key].get(inner_key, 0) for outer_key in outer_keys]
+
+        # 顶部子图（显示极端值顶部）
+        bars_top = ax_top.bar(x_pos, values, bar_width,
+                              color=colors[i], alpha=0.6,
+                              edgecolor='black', linewidth=1)
+
+        # 底部子图（显示主要数据）
+        bars_bottom = ax_bottom.bar(x_pos, values, bar_width,
+                                    label=str(inner_key),
+                                    color=colors[i], alpha=0.6,
+                                    edgecolor='black', linewidth=1)
+
+        # 数值标签智能分配
+        if len(outer_keys) <= 12:
+            for j, (bt, bb, val) in enumerate(zip(bars_top, bars_bottom, values)):
+                if val > 0:
+                    if val > break_point:
+                        # 大值在顶部子图标注（显示完整数值）
+                        ax_top.text(bt.get_x() + bt.get_width() / 2., val,
+                                    f'{int(val)}', ha='center', va='bottom',
+                                    fontsize=8, color=colors[i], fontweight='bold')
+                    else:
+                        # 小值在底部子图标注
+                        y_pos = val / 2 if val > break_point * 0.2 else val
+                        va = 'center' if val > break_point * 0.2 else 'bottom'
+                        fontcolor = 'white' if val > break_point * 0.2 else colors[i]
+                        ax_bottom.text(bb.get_x() + bb.get_width() / 2., y_pos,
+                                       f'{int(val)}', ha='center', va=va,
+                                       fontsize=8, color=fontcolor, fontweight='bold')
+
+    # 设置顶部子图Y轴范围（断裂的上部，只显示超过break_point的部分）
+    ax_top.set_ylim(break_point, top_margin)
+    ax_top.spines['bottom'].set_visible(False)
+    ax_top.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+
+    # 设置底部子图Y轴范围（主要数据区域，0到截断点）
+    ax_bottom.set_ylim(0, break_point)
+    ax_bottom.spines['top'].set_visible(False)
+
+    # 添加断裂标记（斜线）
+    d = 0.015
+    kwargs = dict(transform=ax_top.transAxes, color='k', clip_on=False, linewidth=1.5)
+    ax_top.plot((-d, +d), (-d * 3, +d * 3), **kwargs)
+    ax_top.plot((1 - d, 1 + d), (-d * 3, +d * 3), **kwargs)
+
+    kwargs.update(transform=ax_bottom.transAxes)
+    ax_bottom.plot((-d, +d), (1 - d, 1 + d), **kwargs)
+    ax_bottom.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)
+
+    # 设置X轴
+    ax_bottom.set_xticks(x_pos)
+    ax_bottom.set_xticklabels(outer_keys, rotation=45, ha='right')
+
+    if metadata.get('xlabel'):
+        ax_bottom.set_xlabel(metadata['xlabel'], fontsize=12)
+
+    # Y轴标签
+    ylabel = metadata.get('ylabel') or primary_metric.capitalize()
+    fig.text(0.02, 0.5, ylabel, va='center', rotation='vertical', fontsize=12)
+
+    # 标题
+    ax_top.set_title(metadata.get('title', 'Broken-Axis Overlay Histogram'),
+                     fontsize=14, fontweight='bold', pad=20)
+
+    # 图例
+    dimensions = metadata.get('dimensions', [])
+    legend_title = dimensions[0] if dimensions else 'Category'
+    ax_bottom.legend(title=legend_title, loc='upper right',
+                     framealpha=0.9, fancybox=True, shadow=True)
+
+    # 网格线
+    ax_bottom.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax_bottom.set_axisbelow(True)
+    ax_top.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax_top.set_axisbelow(True)
+
+    # 断裂说明
+    ax_top.text(0.98, 0.02, f'Break: >{int(break_point)}',
+                transform=ax_top.transAxes, fontsize=9, color='gray',
+                ha='right', va='bottom', style='italic')
+
+    plt.tight_layout(rect=[0.03, 0, 1, 1])
+    filename = generate_random_filename(8)
+    filepath = os.path.join(save_dir, filename)
+    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    return filepath
+
+
+def _plot_standard_overlay(outer_keys, inner_keys, data_matrix, colors,
+                           metadata, save_dir, primary_metric):
+    """标准半透明叠加直方图（无截断）"""
+    x_pos = np.arange(len(outer_keys))
+    bar_width = 0.6
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    for i, inner_key in enumerate(inner_keys):
+        values = [data_matrix[outer_key].get(inner_key, 0) for outer_key in outer_keys]
+
+        bars = ax.bar(x_pos, values, bar_width,
+                      label=str(inner_key),
+                      color=colors[i],
+                      alpha=0.5,
+                      edgecolor='black',
+                      linewidth=0.8,
+                      zorder=i)
+
+        if len(outer_keys) <= 12:
+            for j, (bar, val) in enumerate(zip(bars, values)):
+                if val > 0:
+                    height = bar.get_height()
+                    if height < max(values) * 0.3 if max(values) > 0 else False:
+                        y_pos = height
+                        va = 'bottom'
+                        fontcolor = colors[i]
+                        fontweight = 'normal'
+                    else:
+                        y_pos = height / 2
+                        va = 'center'
+                        fontcolor = 'white'
+                        fontweight = 'bold'
+
+                    ax.text(bar.get_x() + bar.get_width() / 2., y_pos,
+                            f'{int(val)}', ha='center', va=va,
+                            fontsize=8, color=fontcolor, fontweight=fontweight)
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(outer_keys, rotation=45, ha='right')
+
+    if metadata.get('xlabel'):
+        ax.set_xlabel(metadata['xlabel'], fontsize=12)
+    if metadata.get('ylabel'):
+        ax.set_ylabel(metadata['ylabel'], fontsize=12)
+    else:
+        ax.set_ylabel(primary_metric.capitalize(), fontsize=12)
+
+    ax.set_title(metadata.get('title', 'Overlay Histogram'), fontsize=14, fontweight='bold', pad=20)
+
+    dimensions = metadata.get('dimensions', [])
+    legend_title = dimensions[0] if dimensions else 'Category'
+    ax.legend(title=legend_title, loc='upper right', framealpha=0.9, fancybox=True, shadow=True)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.set_ylim(bottom=0)
+
+    plt.tight_layout()
+    filename = generate_random_filename(8)
+    filepath = os.path.join(save_dir, filename)
+    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    return filepath
+
 def plot_stats_chart(ax, result_json: Dict[str, Any], query_config: Dict[str, Any],
                      metadata: Dict[str, str], chart_type: str):
     """Handle stats type visualizations"""
@@ -666,12 +961,12 @@ def visualize_opensearch_result(query_json: Dict[str, Any],
     if chart_type == 'heatmap':
         strategy = 'heatmap'
 
-    # 注意：这里移除了强制覆盖heatmap策略的逻辑
-    # 之前的代码在这里会检查range bucket并覆盖strategy，现在不再这样做
-
     try:
-        # 新增：热力图分支
-        if strategy == 'heatmap':
+        # 新增：叠加直方图分支
+        if strategy == 'stacked_histogram':
+            filepath = plot_stacked_histogram(result_json, config, metadata, save_dir)
+            return filepath
+        elif strategy == 'heatmap':
             filepath = plot_heatmap(result_json, config, metadata, save_dir)
             return filepath
         elif strategy == 'grouped_bar':
