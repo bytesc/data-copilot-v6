@@ -20,6 +20,15 @@ client = OpenSearch(
     timeout=30
 )
 
+# client = OpenSearch(
+#     hosts=[{'host': '', 'port': 9200}],
+#     http_auth=('admin', ''),
+#     use_ssl=False,
+#     verify_certs=False,
+#     ssl_show_warn=False,
+#     timeout=30
+# )
+
 # 2. 定义mapping
 index_name = "brset"
 mapping = {
